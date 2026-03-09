@@ -89,6 +89,8 @@ Default behavior is a portable (framework-dependent) package. To force a runtime
 ```powershell
 .\scripts\release\Invoke-ReleasePackaging.ps1 -Version 1.0.0 -RuntimeIdentifier win-x64
 ```
+Note: RID-specific packaging requires runtime packs from `nuget.org` (or an equivalent internal mirror feed).  
+If your machine only has offline sources enabled, `dotnet publish -r <rid>` will fail with `NU1101` package restore errors.
 
 ## Build release package (signed)
 Prerequisites:
