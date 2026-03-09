@@ -34,6 +34,16 @@ Installed Windows desktop app for preparing vendor bills before posting to Quick
   - `Verify QB Results` applies buffered post outcomes to bill state
 - If QB SDK is unavailable, direct mode returns explicit transport errors on verification with safe failure details.
 
+## Slice 3 (packaging + signing workflow)
+- Added release scripts under `scripts/release`:
+  - `Invoke-ReleasePackaging.ps1` (publish, checksum, package zip)
+  - `Sign-ReleaseArtifacts.ps1` (Authenticode signing with `signtool`)
+  - `Verify-Signatures.ps1` (signature status validation)
+- Added CI workflow `.github/workflows/release.yml`:
+  - builds/tests on `workflow_dispatch` and `v*` tags
+  - packages artifacts
+  - optionally signs artifacts when cert secrets are configured
+
 ## Solution layout
 - `src/BillProcessor.App`: WPF desktop shell.
 - `src/BillProcessor.Core`: domain models and processing workflow.
@@ -70,6 +80,45 @@ dotnet run --project .\src\BillProcessor.App\BillProcessor.App.csproj
 ```powershell
 dotnet run --project .\tests\BillProcessor.Core.SelfTests\BillProcessor.Core.SelfTests.csproj
 ```
+
+## Build release package (unsigned)
+```powershell
+.\scripts\release\Invoke-ReleasePackaging.ps1 -Version 1.0.0
+```
+Default behavior is a portable (framework-dependent) package. To force a runtime-specific package:
+```powershell
+.\scripts\release\Invoke-ReleasePackaging.ps1 -Version 1.0.0 -RuntimeIdentifier win-x64
+```
+
+## Build release package (signed)
+Prerequisites:
+- Install Windows SDK `signtool`.
+- Set `RELEASE_CERT_PATH` to your `.pfx` file path.
+- Set `RELEASE_CERT_PASSWORD` to your cert password.
+
+```powershell
+$env:RELEASE_CERT_PATH = "C:\secure\certs\release-cert.pfx"
+$env:RELEASE_CERT_PASSWORD = "{{RELEASE_CERT_PASSWORD}}"
+.\scripts\release\Invoke-ReleasePackaging.ps1 -Version 1.0.0 -RuntimeIdentifier win-x64 -Sign
+```
+
+Outputs:
+- `artifacts/release/VendorBillProcessorQB-<version>-<rid>/` (staging payload + metadata + checksums)
+- `artifacts/release/VendorBillProcessorQB-<version>-<rid>.zip` (distributable package)
+
+## GitHub Actions release workflow
+Workflow file: `.github/workflows/release.yml`
+
+### Manual dispatch
+Provide:
+- `version` (required)
+- optional `runtime`
+- optional `selfContained`
+- optional `sign`
+
+### Required secrets for signing
+- `RELEASE_CERT_BASE64` (base64 encoded PFX)
+- `RELEASE_CERT_PASSWORD`
 
 ## Security notes
 - Local bill data is encrypted at rest using DPAPI (`DataProtectionScope.CurrentUser`).
