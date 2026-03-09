@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BillProcessor.App/BillProcessor.App.csproj" />
+    <Project Path="src/BillProcessor.Core/BillProcessor.Core.csproj" />
+    <Project Path="src/BillProcessor.Infrastructure/BillProcessor.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BillProcessor.Core.SelfTests/BillProcessor.Core.SelfTests.csproj" />
+  </Folder>
+</Solution>
