@@ -60,6 +60,7 @@ public sealed class QuickBooksPostingCoordinator
             {
                 BillId = bill.Id,
                 RequestId = requestId,
+                CompanyFileIdentifier = sessionContext.CompanyFileIdentifier,
                 CreatedAtUtc = DateTimeOffset.UtcNow,
                 PayloadHash = QuickBooksRequestIdGenerator.HashPayload(payload),
                 QbXmlPayload = payload

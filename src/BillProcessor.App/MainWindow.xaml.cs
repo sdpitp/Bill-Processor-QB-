@@ -1,6 +1,7 @@
 ﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using BillProcessor.Core.Abstractions;
 using BillProcessor.Core.Models;
 using BillProcessor.Core.Services;
@@ -19,18 +20,18 @@ public partial class MainWindow : Window
     private readonly CsvBillImporter _csvImporter = new();
     private readonly SecureFileBillRepository _repository = new();
     private readonly SafeAuditLogger _auditLogger = new();
-    private readonly IQuickBooksGateway _quickBooksGateway;
-    private readonly QuickBooksPostingCoordinator _quickBooksCoordinator;
+    private IQuickBooksGateway _quickBooksGateway = null!;
+    private QuickBooksPostingCoordinator _quickBooksCoordinator = null!;
+    private bool _suppressModeChangeMessage;
 
     public MainWindow()
     {
-        _quickBooksGateway = new FileDropQuickBooksGateway();
-        _quickBooksCoordinator = new QuickBooksPostingCoordinator(_quickBooksGateway);
 
         InitializeComponent();
         BillsGrid.ItemsSource = _bills;
-        QuickBooksPathsTextBlock.Text =
-            $"Outbox: {_quickBooksCoordinator.GetOutboxPath()}  Inbox: {_quickBooksCoordinator.GetInboxPath()}";
+        _suppressModeChangeMessage = true;
+        ConfigureQuickBooksGateway();
+        _suppressModeChangeMessage = false;
         Loaded += MainWindowLoaded;
     }
 
@@ -226,5 +227,40 @@ public partial class MainWindow : Window
             CompanyFileIdentifier = CompanyFileTextBox.Text?.Trim() ?? string.Empty,
             RequestedBy = Environment.UserName
         };
+    }
+
+    private void QuickBooksModeSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ConfigureQuickBooksGateway();
+    }
+
+    private void ConfigureQuickBooksGateway()
+    {
+        var mode = GetSelectedTransportMode();
+        _quickBooksGateway = QuickBooksGatewayFactory.Create(mode);
+        _quickBooksCoordinator = new QuickBooksPostingCoordinator(_quickBooksGateway);
+
+        var modeLabel = mode == QuickBooksTransportMode.DirectDesktopSdk
+            ? "Direct Desktop SDK"
+            : "File Drop Bridge";
+        QuickBooksPathsTextBlock.Text =
+            $"{modeLabel} | Outbox: {_quickBooksCoordinator.GetOutboxPath()}  Inbox: {_quickBooksCoordinator.GetInboxPath()}";
+
+        if (!_suppressModeChangeMessage)
+        {
+            UpdateStatus($"QuickBooks transport switched to {modeLabel}.");
+        }
+    }
+
+    private QuickBooksTransportMode GetSelectedTransportMode()
+    {
+        if (QuickBooksModeComboBox.SelectedItem is ComboBoxItem selected &&
+            selected.Tag is string modeTag &&
+            Enum.TryParse<QuickBooksTransportMode>(modeTag, out var parsedMode))
+        {
+            return parsedMode;
+        }
+
+        return QuickBooksTransportMode.FileDropBridge;
     }
 }

@@ -23,6 +23,15 @@
             </WrapPanel>
             <WrapPanel VerticalAlignment="Center">
                 <CheckBox x:Name="AuthorizePostingCheckBox" Margin="0,0,12,0" VerticalAlignment="Center" Content="Authorize QB posting for this session"/>
+                <TextBlock VerticalAlignment="Center" Margin="0,0,6,0" Text="Transport:"/>
+                <ComboBox x:Name="QuickBooksModeComboBox"
+                          Width="220"
+                          Margin="0,0,12,0"
+                          SelectedIndex="0"
+                          SelectionChanged="QuickBooksModeSelectionChanged">
+                    <ComboBoxItem Tag="FileDropBridge">File Drop Bridge</ComboBoxItem>
+                    <ComboBoxItem Tag="DirectDesktopSdk">Direct Desktop SDK (QBXMLRP2)</ComboBoxItem>
+                </ComboBox>
                 <TextBlock VerticalAlignment="Center" Margin="0,0,6,0" Text="Company File:"/>
                 <TextBox x:Name="CompanyFileTextBox" Width="210" Margin="0,0,12,0" Text="PrimaryCompany"/>
                 <TextBlock x:Name="QuickBooksPathsTextBlock" VerticalAlignment="Center" Foreground="#334155"/>

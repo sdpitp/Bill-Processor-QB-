@@ -13,7 +13,9 @@ var testSuite = new (string Name, Action Execute)[]
     ("QB queue posts ready bill with idempotent request ID", ShouldQueueReadyBill),
     ("QB duplicate queue request is skipped", ShouldSkipDuplicateQueueRequest),
     ("QB recoverable failure returns bill to ReadyToPost", ShouldScheduleRecoverableRetry),
-    ("QB success response marks bill as Posted", ShouldMarkBillAsPostedFromVerification)
+    ("QB success response marks bill as Posted", ShouldMarkBillAsPostedFromVerification),
+    ("Direct gateway returns transport results through verify pipeline", ShouldProcessDirectGatewayResults),
+    ("Direct gateway enforces idempotent request IDs", ShouldSkipDirectGatewayDuplicates)
 };
 
 var failures = new List<string>();
@@ -201,6 +203,38 @@ static void ShouldMarkBillAsPostedFromVerification()
     AssertEqual("TXN-123456", bill.QuickBooksTxnId, "QuickBooks Txn ID should be persisted.");
 }
 
+static void ShouldProcessDirectGatewayResults()
+{
+    var transport = new FakeDesktopTransport();
+    var gateway = new DirectStyleGateway(transport);
+    var coordinator = new QuickBooksPostingCoordinator(gateway);
+    var bill = CreateReadyBill();
+
+    var queueSummary = coordinator.QueueBillsAsync([bill], CreateAuthorizedSession()).GetAwaiter().GetResult();
+    AssertEqual(1, queueSummary.QueuedCount, "Direct gateway should accept queue item.");
+
+    var verification = coordinator.ApplyVerificationResultsAsync([bill]).GetAwaiter().GetResult();
+    AssertEqual(1, verification.PostedCount, "Direct gateway result should flow into verification.");
+    AssertEqual(BillProcessingStatus.Posted, bill.Status, "Bill should be marked posted from direct transport result.");
+    AssertTrue(transport.Calls == 1, "Direct transport should be called once.");
+}
+
+static void ShouldSkipDirectGatewayDuplicates()
+{
+    var transport = new FakeDesktopTransport();
+    var gateway = new DirectStyleGateway(transport);
+    var coordinator = new QuickBooksPostingCoordinator(gateway);
+    var bill = CreateReadyBill();
+    var session = CreateAuthorizedSession();
+
+    var first = coordinator.QueueBillsAsync([bill], session).GetAwaiter().GetResult();
+    var second = coordinator.QueueBillsAsync([bill], session).GetAwaiter().GetResult();
+
+    AssertEqual(1, first.QueuedCount, "First queue should submit to direct transport.");
+    AssertEqual(1, second.SkippedCount, "Second queue should skip already queued bill.");
+    AssertTrue(transport.Calls == 1, "Direct transport should only be called once.");
+}
+
 static BillRecord CreateReadyBill()
 {
     var bill = new BillRecord
@@ -306,4 +340,90 @@ sealed class FakeQuickBooksGateway : IQuickBooksGateway
 
     public string GetOutboxPath() => "fake/outbox";
     public string GetInboxPath() => "fake/inbox";
+}
+
+sealed class FakeDesktopTransport : IQuickBooksDesktopTransport
+{
+    public int Calls { get; private set; }
+
+    public Task<QuickBooksPostResult> SubmitBillAsync(
+        QuickBooksDirectPostRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Calls++;
+        return Task.FromResult(new QuickBooksPostResult
+        {
+            RequestId = request.RequestId,
+            Success = true,
+            Recoverable = false,
+            QuickBooksTxnId = $"TXN-DIRECT-{Calls}",
+            ProcessedAtUtc = DateTimeOffset.UtcNow
+        });
+    }
+
+    public string GetTransportName() => "FakeDesktopTransport";
+}
+
+sealed class DirectStyleGateway : IQuickBooksGateway
+{
+    private readonly IQuickBooksDesktopTransport _transport;
+    private readonly Dictionary<string, QuickBooksPostResult> _pendingResults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _seenRequestIds = new(StringComparer.OrdinalIgnoreCase);
+
+    public DirectStyleGateway(IQuickBooksDesktopTransport transport)
+    {
+        _transport = transport;
+    }
+
+    public async Task<IReadOnlyList<QuickBooksQueueResult>> QueueAsync(
+        IReadOnlyList<QuickBooksPostEnvelope> envelopes,
+        CancellationToken cancellationToken = default)
+    {
+        var queueResults = new List<QuickBooksQueueResult>();
+        foreach (var envelope in envelopes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_seenRequestIds.Add(envelope.RequestId))
+            {
+                queueResults.Add(new QuickBooksQueueResult
+                {
+                    RequestId = envelope.RequestId,
+                    QueuedNewRequest = false,
+                    Detail = "Duplicate."
+                });
+                continue;
+            }
+
+            var result = await _transport.SubmitBillAsync(
+                new QuickBooksDirectPostRequest
+                {
+                    RequestId = envelope.RequestId,
+                    CompanyFileIdentifier = envelope.CompanyFileIdentifier,
+                    QbXmlPayload = envelope.QbXmlPayload
+                },
+                cancellationToken);
+
+            _pendingResults[envelope.RequestId] = result;
+            queueResults.Add(new QuickBooksQueueResult
+            {
+                RequestId = envelope.RequestId,
+                QueuedNewRequest = true,
+                Detail = "Submitted."
+            });
+        }
+
+        return queueResults;
+    }
+
+    public Task<IReadOnlyList<QuickBooksPostResult>> FetchResultsAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<QuickBooksPostResult> snapshot = _pendingResults.Values.ToList();
+        _pendingResults.Clear();
+        return Task.FromResult(snapshot);
+    }
+
+    public string GetOutboxPath() => "direct://fake/outbox";
+    public string GetInboxPath() => "direct://fake/inbox";
 }

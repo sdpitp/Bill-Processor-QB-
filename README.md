@@ -13,6 +13,7 @@ Installed Windows desktop app for preparing vendor bills before posting to Quick
 ## Slice 2 (QuickBooks integration workflow)
 - Guarded posting controls in the UI:
   - session authorization checkbox
+  - transport selector (File Drop Bridge or Direct Desktop SDK)
   - company file identifier input
 - Idempotent request queueing with deterministic request IDs.
 - QuickBooks bridge outbox/inbox workflow:
@@ -25,11 +26,20 @@ Installed Windows desktop app for preparing vendor bills before posting to Quick
 - Retry-aware posting metadata tracked per bill:
   - request ID, attempts, last error, QuickBooks Txn ID, posted timestamp
 
+## Slice 2.5 (direct transport mode)
+- Added `Direct Desktop SDK (QBXMLRP2)` mode that submits qbXML directly via QuickBooks Desktop RequestProcessor COM automation.
+- Transport mode is selectable at runtime in the app header.
+- Direct mode keeps the same queue/verify workflow:
+  - `Queue QB Post` submits through direct transport and buffers results
+  - `Verify QB Results` applies buffered post outcomes to bill state
+- If QB SDK is unavailable, direct mode returns explicit transport errors on verification with safe failure details.
+
 ## Solution layout
 - `src/BillProcessor.App`: WPF desktop shell.
 - `src/BillProcessor.Core`: domain models and processing workflow.
 - `src/BillProcessor.Infrastructure`: secure storage, importers, and safe logging.
 - `src/BillProcessor.Infrastructure/QuickBooks`: file-drop QuickBooks bridge gateway.
+- `src/BillProcessor.Infrastructure/QuickBooks/QbXmlRp2DesktopTransport.cs`: direct QuickBooks Desktop transport.
 - `tests/BillProcessor.Core.SelfTests`: no-dependency automated self-tests.
 
 ## CSV import format
@@ -90,3 +100,10 @@ Accepted inbox result formats:
 }
 ```
 2. QuickBooks XML response containing `BillAddRs` (requestID + statusCode + statusMessage + optional `TxnID`).
+
+## Direct Desktop SDK notes
+- Direct mode requires QuickBooks Desktop SDK components exposing `QBXMLRP2.RequestProcessor`.
+- QuickBooks Desktop must be installed and accessible under the current user context.
+- For direct mode company-file targeting:
+  - pass a `.QBW` path in the Company File box to target a specific company file
+  - non-path identifiers are treated as current/active company context
