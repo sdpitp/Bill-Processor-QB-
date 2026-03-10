@@ -35,6 +35,62 @@ public sealed class FileDropQuickBooksGateway : IQuickBooksGateway
     public string GetOutboxPath() => _outboxDirectory;
     public string GetInboxPath() => _inboxDirectory;
 
+    public async Task<QuickBooksBillPaySnapshot> GetBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureDirectories();
+
+        var snapshotFile = Directory.EnumerateFiles(_inboxDirectory, "billpay-snapshot*.json", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        if (snapshotFile is null)
+        {
+            return new QuickBooksBillPaySnapshot
+            {
+                SyncedAtUtc = DateTimeOffset.UtcNow,
+                OperatingAccountName = request.OperatingAccountName,
+                OperatingAccountBalance = 0m,
+                SourceDescription = "File drop snapshot",
+                WarningMessage = "No billpay-snapshot JSON file found in inbox.",
+                Bills = []
+            };
+        }
+
+        var payload = await File.ReadAllTextAsync(snapshotFile, cancellationToken);
+        var parsed = JsonSerializer.Deserialize<BillPaySnapshotDto>(payload, SerializerOptions)
+                     ?? throw new InvalidDataException("Unable to parse billpay-snapshot JSON.");
+
+        var bills = parsed.Bills?.Select(bill => new BillRecord
+        {
+            Id = Guid.NewGuid(),
+            VendorName = bill.VendorName ?? string.Empty,
+            InvoiceNumber = bill.InvoiceNumber ?? string.Empty,
+            InvoiceDate = bill.InvoiceDate,
+            DueDate = bill.DueDate,
+            Amount = bill.Amount,
+            ExpenseAccountName = bill.ExpenseAccountName ?? "Uncategorized Expense",
+            PurchaseOrderOrJobRaw = bill.PoJob ?? string.Empty,
+            PurchaseOrderOrJobNormalized = bill.PoJob ?? string.Empty,
+            QuickBooksTxnId = bill.QuickBooksTxnId ?? string.Empty,
+            SyncedFromQuickBooks = true,
+            ApprovedForPrint = false,
+            Status = BillProcessingStatus.ReadyToPost
+        }).ToList() ?? [];
+
+        return new QuickBooksBillPaySnapshot
+        {
+            SyncedAtUtc = parsed.SyncedAtUtc ?? DateTimeOffset.UtcNow,
+            OperatingAccountName = parsed.OperatingAccountName ?? request.OperatingAccountName,
+            OperatingAccountBalance = parsed.OperatingAccountBalance,
+            SourceDescription = "File drop snapshot",
+            WarningMessage = string.Empty,
+            Bills = bills
+        };
+    }
+
     public async Task<IReadOnlyList<QuickBooksQueueResult>> QueueAsync(
         IReadOnlyList<QuickBooksPostEnvelope> envelopes,
         CancellationToken cancellationToken = default)
@@ -251,5 +307,25 @@ public sealed class FileDropQuickBooksGateway : IQuickBooksGateway
         public string? ErrorMessage { get; set; }
         public string? QuickBooksTxnId { get; set; }
         public DateTimeOffset? ProcessedAtUtc { get; set; }
+    }
+
+    private sealed class BillPaySnapshotDto
+    {
+        public DateTimeOffset? SyncedAtUtc { get; set; }
+        public string? OperatingAccountName { get; set; }
+        public decimal OperatingAccountBalance { get; set; }
+        public List<BillPayBillDto>? Bills { get; set; }
+    }
+
+    private sealed class BillPayBillDto
+    {
+        public string? VendorName { get; set; }
+        public string? InvoiceNumber { get; set; }
+        public DateTime? InvoiceDate { get; set; }
+        public DateTime? DueDate { get; set; }
+        public decimal Amount { get; set; }
+        public string? PoJob { get; set; }
+        public string? ExpenseAccountName { get; set; }
+        public string? QuickBooksTxnId { get; set; }
     }
 }

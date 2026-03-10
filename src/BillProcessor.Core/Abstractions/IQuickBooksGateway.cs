@@ -9,6 +9,9 @@ public interface IQuickBooksGateway
         CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<QuickBooksPostResult>> FetchResultsAsync(CancellationToken cancellationToken = default);
+    Task<QuickBooksBillPaySnapshot> GetBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default);
 
     string GetOutboxPath();
     string GetInboxPath();

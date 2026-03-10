@@ -1,37 +1,45 @@
 ﻿using System.Collections.ObjectModel;
-using System.IO;
+using System.ComponentModel;
+using System.Globalization;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
 using BillProcessor.Core.Abstractions;
 using BillProcessor.Core.Models;
 using BillProcessor.Core.Services;
-using BillProcessor.Infrastructure.Import;
-using BillProcessor.Infrastructure.Logging;
 using BillProcessor.Infrastructure.Persistence;
 using BillProcessor.Infrastructure.QuickBooks;
-using Microsoft.Win32;
 
 namespace BillProcessor.App;
 
 public partial class MainWindow : Window
 {
+    private const int DueSoonWindowDays = 3;
     private readonly ObservableCollection<BillRecord> _bills = [];
-    private readonly BillWorkflowEngine _workflowEngine = new();
-    private readonly CsvBillImporter _csvImporter = new();
+    private readonly BillPayPlanner _billPayPlanner = new();
     private readonly SecureFileBillRepository _repository = new();
-    private readonly SafeAuditLogger _auditLogger = new();
     private IQuickBooksGateway _quickBooksGateway = null!;
     private QuickBooksPostingCoordinator _quickBooksCoordinator = null!;
+    private ICollectionView _billsView = null!;
     private bool _suppressModeChangeMessage;
+    private BillDueBucket? _activeDueFilter;
+    private decimal _operatingAccountBalance;
 
     public MainWindow()
     {
-
         InitializeComponent();
-        BillsGrid.ItemsSource = _bills;
+
+        _billsView = CollectionViewSource.GetDefaultView(_bills);
+        _billsView.Filter = BillPassesActiveFilter;
+        _billsView.SortDescriptions.Add(new SortDescription(nameof(BillRecord.DueDate), ListSortDirection.Ascending));
+        BillsGrid.ItemsSource = _billsView;
+
         _suppressModeChangeMessage = true;
         ConfigureQuickBooksGateway();
         _suppressModeChangeMessage = false;
+
         Loaded += MainWindowLoaded;
     }
 
@@ -40,110 +48,116 @@ public partial class MainWindow : Window
         await ReloadFromDiskAsync();
     }
 
-    private async void ImportCsvClick(object sender, RoutedEventArgs e)
+    private async void SyncBillPaySnapshotClick(object sender, RoutedEventArgs e)
     {
         try
         {
-            var dialog = new OpenFileDialog
+            var request = new QuickBooksBillPaySyncRequest
             {
-                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
-                Title = "Import Vendor Bills"
+                CompanyFileIdentifier = CompanyFileTextBox.Text?.Trim() ?? string.Empty,
+                OperatingAccountName = OperatingAccountTextBox.Text?.Trim() ?? "Operating Account",
+                DueSoonDays = DueSoonWindowDays,
+                MaxBillsToReturn = 1000,
+                AsOfDate = DateTime.Today
             };
 
-            if (dialog.ShowDialog() != true)
+            var snapshot = await _quickBooksGateway.GetBillPaySnapshotAsync(request);
+            _bills.Clear();
+            foreach (var bill in snapshot.Bills)
             {
-                return;
-            }
-
-            var imported = await _csvImporter.ImportAsync(dialog.FileName);
-            foreach (var bill in imported)
-            {
+                bill.ApprovedForPrint = false;
                 _bills.Add(bill);
             }
 
-            UpdateStatus($"Imported {imported.Count} bill(s) from {Path.GetFileName(dialog.FileName)}.");
-        }
-        catch (Exception exception)
-        {
-            ShowError("CSV import failed.", exception);
-        }
-    }
+            _operatingAccountBalance = snapshot.OperatingAccountBalance;
+            ApplyDueClassification();
+            ApproveAllHeaderCheckBox.IsChecked = false;
+            UpdateBalancePanel();
 
-    private void AddBlankBillClick(object sender, RoutedEventArgs e)
-    {
-        var bill = new BillRecord
-        {
-            Status = BillProcessingStatus.Imported,
-            ExpenseAccountName = "Uncategorized Expense"
-        };
-        bill.AddAudit("created", "Created manually in UI.");
-        _bills.Add(bill);
-        UpdateStatus($"Added blank bill. Current grid count: {_bills.Count}.");
-    }
-
-    private async void NormalizeAndValidateClick(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var candidates = _bills.Where(bill =>
-                bill.Status is BillProcessingStatus.Imported
-                    or BillProcessingStatus.Normalized
-                    or BillProcessingStatus.NeedsReview
-                    or BillProcessingStatus.ReadyToPost
-                    or BillProcessingStatus.PostingFailed);
-
-            foreach (var bill in candidates)
+            var message = $"Synced {_bills.Count} unpaid bill(s). Operating balance: {_operatingAccountBalance:C2}.";
+            if (!string.IsNullOrWhiteSpace(snapshot.WarningMessage))
             {
-                _workflowEngine.Process(bill);
-                await _auditLogger.LogProcessAsync(bill);
+                message += $" Warning: {snapshot.WarningMessage}";
             }
 
-            BillsGrid.Items.Refresh();
-            var readyToPostCount = _bills.Count(bill => bill.Status == BillProcessingStatus.ReadyToPost);
-            var needsReviewCount = _bills.Count(bill => bill.Status == BillProcessingStatus.NeedsReview);
-
-            UpdateStatus(
-                $"Processed {_bills.Count} bill(s): {readyToPostCount} ready to post, {needsReviewCount} need review.");
+            UpdateStatus(message);
         }
         catch (Exception exception)
         {
-            ShowError("Normalize/validate failed.", exception);
+            ShowError("QuickBooks sync failed.", exception);
         }
     }
 
-    private async void QueueToQuickBooksClick(object sender, RoutedEventArgs e)
+    private void FilterAllClick(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            var sessionContext = BuildQuickBooksSessionContext();
-            var summary = await _quickBooksCoordinator.QueueBillsAsync(_bills, sessionContext);
-            await _repository.SaveAsync(_bills);
-            BillsGrid.Items.Refresh();
-
-            UpdateStatus(
-                $"QB queue complete: eligible {summary.EligibleCount}, queued {summary.QueuedCount}, duplicates {summary.DuplicateCount}, skipped {summary.SkippedCount}.");
-        }
-        catch (Exception exception)
-        {
-            ShowError("Queue to QuickBooks failed.", exception);
-        }
+        _activeDueFilter = null;
+        _billsView.Refresh();
+        UpdateStatus("Filter set to: All unpaid bills.");
     }
 
-    private async void VerifyQuickBooksResultsClick(object sender, RoutedEventArgs e)
+    private void FilterOverdueClick(object sender, RoutedEventArgs e)
     {
-        try
-        {
-            var summary = await _quickBooksCoordinator.ApplyVerificationResultsAsync(_bills);
-            await _repository.SaveAsync(_bills);
-            BillsGrid.Items.Refresh();
+        _activeDueFilter = BillDueBucket.Overdue;
+        _billsView.Refresh();
+        UpdateStatus("Filter set to: Overdue bills.");
+    }
 
-            UpdateStatus(
-                $"QB verify complete: read {summary.TotalResultsRead}, posted {summary.PostedCount}, failed {summary.FailedCount}, retry {summary.RecoverableFailuresScheduledForRetry}, unmatched {summary.UnmatchedResults}.");
-        }
-        catch (Exception exception)
+    private void FilterDueSoonClick(object sender, RoutedEventArgs e)
+    {
+        _activeDueFilter = BillDueBucket.DueSoon;
+        _billsView.Refresh();
+        UpdateStatus("Filter set to: Due within 3 days.");
+    }
+
+    private void FilterUpcomingClick(object sender, RoutedEventArgs e)
+    {
+        _activeDueFilter = BillDueBucket.Upcoming;
+        _billsView.Refresh();
+        UpdateStatus("Filter set to: Upcoming bills.");
+    }
+
+    private void ApproveAllHeaderClick(object sender, RoutedEventArgs e)
+    {
+        var shouldApprove = ApproveAllHeaderCheckBox.IsChecked == true;
+        foreach (var bill in _billsView.Cast<BillRecord>())
         {
-            ShowError("Verify QuickBooks results failed.", exception);
+            bill.ApprovedForPrint = shouldApprove;
         }
+
+        BillsGrid.Items.Refresh();
+        UpdateBalancePanel();
+    }
+
+    private void BillApprovalChanged(object sender, RoutedEventArgs e)
+    {
+        UpdateBalancePanel();
+    }
+
+    private void PrintApprovedChecksClick(object sender, RoutedEventArgs e)
+    {
+        var approvedBills = _bills
+            .Where(bill => bill.ApprovedForPrint)
+            .OrderBy(bill => bill.DueDate ?? DateTime.MaxValue)
+            .ThenBy(bill => bill.VendorName)
+            .ToList();
+
+        if (approvedBills.Count == 0)
+        {
+            MessageBox.Show(
+                "No bills are currently approved for printing.",
+                "Print Approved Checks",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        var summaryText = BuildCheckRunSummary(approvedBills);
+        var summaryWindow = new CheckRunSummaryWindow(summaryText)
+        {
+            Owner = this
+        };
+
+        summaryWindow.ShowDialog();
     }
 
     private async void SaveClick(object sender, RoutedEventArgs e)
@@ -178,6 +192,8 @@ public partial class MainWindow : Window
         }
 
         _bills.Clear();
+        _operatingAccountBalance = 0m;
+        UpdateBalancePanel();
         UpdateStatus("Cleared grid.");
     }
 
@@ -192,6 +208,8 @@ public partial class MainWindow : Window
                 _bills.Add(bill);
             }
 
+            ApplyDueClassification();
+            UpdateBalancePanel();
             UpdateStatus(
                 loadedBills.Count == 0
                     ? "No saved bills found yet."
@@ -201,6 +219,70 @@ public partial class MainWindow : Window
         {
             ShowError("Reload failed.", exception);
         }
+    }
+
+    private void ApplyDueClassification()
+    {
+        _billPayPlanner.ClassifyDueBuckets(_bills, DateTime.Today, DueSoonWindowDays);
+        _billsView.Refresh();
+        BillsGrid.Items.Refresh();
+    }
+
+    private bool BillPassesActiveFilter(object item)
+    {
+        if (item is not BillRecord bill)
+        {
+            return false;
+        }
+
+        return !_activeDueFilter.HasValue || bill.DueBucket == _activeDueFilter.Value;
+    }
+
+    private void UpdateBalancePanel()
+    {
+        var approvedTotal = _billPayPlanner.CalculateApprovedCheckTotal(_bills);
+        var balanceAfter = _billPayPlanner.CalculateBalanceAfterApprovedChecks(_operatingAccountBalance, _bills);
+
+        BalanceBeforeValueTextBlock.Text = _operatingAccountBalance.ToString("C2", CultureInfo.CurrentCulture);
+        ApprovedTotalValueTextBlock.Text = approvedTotal.ToString("C2", CultureInfo.CurrentCulture);
+        BalanceAfterValueTextBlock.Text = balanceAfter.ToString("C2", CultureInfo.CurrentCulture);
+        BalanceAfterValueTextBlock.Foreground = balanceAfter < 0m ? Brushes.OrangeRed : Brushes.White;
+    }
+
+    private string BuildCheckRunSummary(IReadOnlyList<BillRecord> approvedBills)
+    {
+        var approvedTotal = _billPayPlanner.CalculateApprovedCheckTotal(approvedBills);
+        var balanceAfter = _billPayPlanner.CalculateBalanceAfterApprovedChecks(_operatingAccountBalance, approvedBills);
+        var builder = new StringBuilder();
+        builder.AppendLine("Vendor Bill Pay - Approved Check Run Summary");
+        builder.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        builder.AppendLine($"Operating Account: {OperatingAccountTextBox.Text?.Trim() ?? "Operating Account"}");
+        builder.AppendLine($"Balance Before: {_operatingAccountBalance:C2}");
+        builder.AppendLine($"Approved Check Total: {approvedTotal:C2}");
+        builder.AppendLine($"Balance After: {balanceAfter:C2}");
+        builder.AppendLine(new string('-', 80));
+        builder.AppendLine("Vendor                          Invoice #       Due Date      Amount");
+        builder.AppendLine(new string('-', 80));
+
+        foreach (var bill in approvedBills)
+        {
+            builder.AppendLine(
+                $"{Truncate(bill.VendorName, 30),-30} {Truncate(bill.InvoiceNumber, 14),-14} {(bill.DueDate?.ToString("yyyy-MM-dd") ?? "N/A"),-12} {bill.Amount,12:C2}");
+        }
+
+        builder.AppendLine(new string('-', 80));
+        builder.AppendLine($"Total Approved: {approvedTotal:C2}");
+        return builder.ToString();
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Length <= maxLength ? value : value[..maxLength];
     }
 
     private void UpdateStatus(string message)
@@ -213,20 +295,9 @@ public partial class MainWindow : Window
         UpdateStatus($"{title} {exception.Message}");
         MessageBox.Show(
             $"{title}\n\n{exception.Message}",
-            "Vendor Bill Processor",
+            "Vendor Bill Pay Manager",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
-    }
-
-    private QuickBooksSessionContext BuildQuickBooksSessionContext()
-    {
-        return new QuickBooksSessionContext
-        {
-            IsPostingAuthorizedForSession = AuthorizePostingCheckBox.IsChecked == true,
-            AccessIntent = QuickBooksAccessIntent.PostBills,
-            CompanyFileIdentifier = CompanyFileTextBox.Text?.Trim() ?? string.Empty,
-            RequestedBy = Environment.UserName
-        };
     }
 
     private void QuickBooksModeSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -256,7 +327,7 @@ public partial class MainWindow : Window
     {
         if (QuickBooksModeComboBox.SelectedItem is ComboBoxItem selected &&
             selected.Tag is string modeTag &&
-            Enum.TryParse<QuickBooksTransportMode>(modeTag, out var parsedMode))
+            Enum.TryParse(modeTag, out QuickBooksTransportMode parsedMode))
         {
             return parsedMode;
         }

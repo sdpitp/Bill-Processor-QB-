@@ -82,4 +82,12 @@ public sealed class DirectQuickBooksGateway : IQuickBooksGateway
 
         return Task.FromResult(snapshot);
     }
+
+    public Task<QuickBooksBillPaySnapshot> GetBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return _transport.ReadBillPaySnapshotAsync(request, cancellationToken);
+    }
 }

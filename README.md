@@ -44,6 +44,20 @@ Installed Windows desktop app for preparing vendor bills before posting to Quick
   - packages artifacts
   - optionally signs artifacts when cert secrets are configured
 
+## Slice 4 (bill pay management dashboard)
+- Added `Sync QB Bills + Balance` workflow to pull unpaid vendor bills and operating account balance from QuickBooks Desktop.
+- Added due-date classification with a fixed **3-day due-soon window**:
+  - `Overdue` (past due)
+  - `DueSoon` (due in 0-3 days)
+  - `Upcoming` (due in 4+ days)
+- Added dashboard filters for All / Overdue / Due Soon / Upcoming.
+- Added per-row and header-level approval checkboxes for check-run selection.
+- Added running totals panel:
+  - operating balance before run
+  - approved check total
+  - projected operating balance after run
+- Added print-ready approved check run summary window with native print dialog support.
+
 ## Solution layout
 - `src/BillProcessor.App`: WPF desktop shell.
 - `src/BillProcessor.Core`: domain models and processing workflow.
@@ -151,10 +165,31 @@ Accepted inbox result formats:
 }
 ```
 2. QuickBooks XML response containing `BillAddRs` (requestID + statusCode + statusMessage + optional `TxnID`).
+3. Bill pay snapshot JSON file named `billpay-snapshot*.json` (used by File Drop Bridge mode for Slice 4 sync):
+```json
+{
+  "syncedAtUtc": "2026-03-09T15:30:00Z",
+  "operatingAccountName": "Operating Account",
+  "operatingAccountBalance": 12050.42,
+  "bills": [
+    {
+      "vendorName": "Acme Supplies",
+      "invoiceNumber": "INV-1001",
+      "invoiceDate": "2026-03-01T00:00:00",
+      "dueDate": "2026-03-15T00:00:00",
+      "amount": 1532.55,
+      "poJob": "123456-88",
+      "expenseAccountName": "Materials",
+      "quickBooksTxnId": "7D2A-112233"
+    }
+  ]
+}
+```
 
 ## Direct Desktop SDK notes
 - Direct mode requires QuickBooks Desktop SDK components exposing `QBXMLRP2.RequestProcessor`.
 - QuickBooks Desktop must be installed and accessible under the current user context.
+- Slice 4 sync in direct mode queries unpaid bills (`BillQueryRq` with `PaidStatus=NotPaidOnly`) and operating account balance (`AccountQueryRq`).
 - For direct mode company-file targeting:
   - pass a `.QBW` path in the Company File box to target a specific company file
   - non-path identifiers are treated as current/active company context

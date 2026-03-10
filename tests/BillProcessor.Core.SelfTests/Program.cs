@@ -15,7 +15,9 @@ var testSuite = new (string Name, Action Execute)[]
     ("QB recoverable failure returns bill to ReadyToPost", ShouldScheduleRecoverableRetry),
     ("QB success response marks bill as Posted", ShouldMarkBillAsPostedFromVerification),
     ("Direct gateway returns transport results through verify pipeline", ShouldProcessDirectGatewayResults),
-    ("Direct gateway enforces idempotent request IDs", ShouldSkipDirectGatewayDuplicates)
+    ("Direct gateway enforces idempotent request IDs", ShouldSkipDirectGatewayDuplicates),
+    ("BillPay planner classifies overdue/due-soon/upcoming/unknown buckets", ShouldClassifyDueBuckets),
+    ("BillPay planner computes approved totals and balance-after", ShouldCalculateApprovedTotalsAndBalanceAfter)
 };
 
 var failures = new List<string>();
@@ -235,6 +237,66 @@ static void ShouldSkipDirectGatewayDuplicates()
     AssertTrue(transport.Calls == 1, "Direct transport should only be called once.");
 }
 
+static void ShouldClassifyDueBuckets()
+{
+    var planner = new BillPayPlanner();
+    var asOf = new DateTime(2026, 3, 10);
+    var bills = new List<BillRecord>
+    {
+        new()
+        {
+            VendorName = "Overdue Vendor",
+            DueDate = asOf.AddDays(-1),
+            Amount = 100m
+        },
+        new()
+        {
+            VendorName = "Due Soon Vendor",
+            DueDate = asOf.AddDays(3),
+            Amount = 200m
+        },
+        new()
+        {
+            VendorName = "Upcoming Vendor",
+            DueDate = asOf.AddDays(6),
+            Amount = 300m
+        },
+        new()
+        {
+            VendorName = "Unknown Due Date Vendor",
+            DueDate = null,
+            Amount = 400m
+        }
+    };
+
+    planner.ClassifyDueBuckets(bills, asOf, dueSoonDays: 3);
+
+    AssertEqual(BillDueBucket.Overdue, bills[0].DueBucket, "Past due bill should classify as Overdue.");
+    AssertEqual(-1, bills[0].DaysUntilDue, "Overdue bill should have negative days.");
+    AssertEqual(BillDueBucket.DueSoon, bills[1].DueBucket, "Bill due in 3 days should classify as DueSoon.");
+    AssertEqual(3, bills[1].DaysUntilDue, "DueSoon bill should have expected day delta.");
+    AssertEqual(BillDueBucket.Upcoming, bills[2].DueBucket, "Bill due beyond dueSoon window should classify as Upcoming.");
+    AssertEqual(BillDueBucket.Unknown, bills[3].DueBucket, "Bill without due date should classify as Unknown.");
+    AssertEqual(int.MaxValue, bills[3].DaysUntilDue, "Unknown due date should use sentinel day value.");
+}
+
+static void ShouldCalculateApprovedTotalsAndBalanceAfter()
+{
+    var planner = new BillPayPlanner();
+    var bills = new List<BillRecord>
+    {
+        new() { VendorName = "A", Amount = 120.25m, ApprovedForPrint = true },
+        new() { VendorName = "B", Amount = 80.00m, ApprovedForPrint = false },
+        new() { VendorName = "C", Amount = 19.75m, ApprovedForPrint = true }
+    };
+
+    var approvedTotal = planner.CalculateApprovedCheckTotal(bills);
+    var balanceAfter = planner.CalculateBalanceAfterApprovedChecks(500m, bills);
+
+    AssertEqual(140.00m, approvedTotal, "Approved total should include only approved bills.");
+    AssertEqual(360.00m, balanceAfter, "Balance-after should subtract approved total from operating balance.");
+}
+
 static BillRecord CreateReadyBill()
 {
     var bill = new BillRecord
@@ -338,6 +400,21 @@ sealed class FakeQuickBooksGateway : IQuickBooksGateway
         return Task.FromResult<IReadOnlyList<QuickBooksPostResult>>(snapshot);
     }
 
+    public Task<QuickBooksBillPaySnapshot> GetBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new QuickBooksBillPaySnapshot
+        {
+            SyncedAtUtc = DateTimeOffset.UtcNow,
+            OperatingAccountName = request.OperatingAccountName,
+            OperatingAccountBalance = 0m,
+            SourceDescription = "Fake gateway",
+            Bills = []
+        });
+    }
+
     public string GetOutboxPath() => "fake/outbox";
     public string GetInboxPath() => "fake/inbox";
 }
@@ -359,6 +436,21 @@ sealed class FakeDesktopTransport : IQuickBooksDesktopTransport
             Recoverable = false,
             QuickBooksTxnId = $"TXN-DIRECT-{Calls}",
             ProcessedAtUtc = DateTimeOffset.UtcNow
+        });
+    }
+
+    public Task<QuickBooksBillPaySnapshot> ReadBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new QuickBooksBillPaySnapshot
+        {
+            SyncedAtUtc = DateTimeOffset.UtcNow,
+            OperatingAccountName = request.OperatingAccountName,
+            OperatingAccountBalance = 1000m,
+            SourceDescription = "Fake desktop transport",
+            Bills = []
         });
     }
 
@@ -422,6 +514,14 @@ sealed class DirectStyleGateway : IQuickBooksGateway
         IReadOnlyList<QuickBooksPostResult> snapshot = _pendingResults.Values.ToList();
         _pendingResults.Clear();
         return Task.FromResult(snapshot);
+    }
+
+    public Task<QuickBooksBillPaySnapshot> GetBillPaySnapshotAsync(
+        QuickBooksBillPaySyncRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return _transport.ReadBillPaySnapshotAsync(request, cancellationToken);
     }
 
     public string GetOutboxPath() => "direct://fake/outbox";

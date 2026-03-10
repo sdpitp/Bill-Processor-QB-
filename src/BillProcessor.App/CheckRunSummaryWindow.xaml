@@ -1,0 +1,39 @@
+﻿<Window x:Class="BillProcessor.App.CheckRunSummaryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Approved Check Run Summary"
+        Height="640"
+        Width="900"
+        MinHeight="480"
+        MinWidth="700"
+        WindowStartupLocation="CenterOwner">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Margin="0,10,0,0">
+            <Button Content="Print"
+                    Width="90"
+                    Margin="0,0,8,0"
+                    Click="PrintClick" />
+            <Button Content="Close"
+                    Width="90"
+                    IsCancel="True" />
+        </StackPanel>
+
+        <Border BorderBrush="#CBD5E1"
+                BorderThickness="1"
+                CornerRadius="4">
+            <TextBox x:Name="SummaryTextBox"
+                     FontFamily="Consolas"
+                     FontSize="13"
+                     IsReadOnly="True"
+                     TextWrapping="NoWrap"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"
+                     AcceptsReturn="True"
+                     BorderThickness="0"
+                     Padding="10" />
+        </Border>
+    </DockPanel>
+</Window>

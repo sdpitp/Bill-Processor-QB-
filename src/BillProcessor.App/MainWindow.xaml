@@ -4,38 +4,85 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="Vendor Bill Processor (QuickBooks Desktop)"
-        Height="720"
-        Width="1280"
-        MinHeight="560"
-        MinWidth="980">
+        Title="Vendor Bill Pay Manager (QuickBooks Desktop)"
+        Height="760"
+        Width="1380"
+        MinHeight="620"
+        MinWidth="1080">
+    <Window.Resources>
+        <Style TargetType="DataGridRow">
+            <Setter Property="Background" Value="White"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding DueBucket}" Value="Overdue">
+                    <Setter Property="Background" Value="#FEE2E2"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DueBucket}" Value="DueSoon">
+                    <Setter Property="Background" Value="#FEF3C7"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DueBucket}" Value="Upcoming">
+                    <Setter Property="Background" Value="#DCFCE7"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
     <DockPanel Margin="12">
         <StackPanel DockPanel.Dock="Top" Margin="0,0,0,10">
             <WrapPanel Margin="0,0,0,8">
-                <Button Content="Import CSV" Width="110" Margin="0,0,8,0" Click="ImportCsvClick"/>
-                <Button Content="Add Bill" Width="90" Margin="0,0,8,0" Click="AddBlankBillClick"/>
-                <Button Content="Normalize + Validate" Width="155" Margin="0,0,8,0" Click="NormalizeAndValidateClick"/>
-                <Button Content="Queue QB Post" Width="120" Margin="0,0,8,0" Click="QueueToQuickBooksClick"/>
-                <Button Content="Verify QB Results" Width="130" Margin="0,0,8,0" Click="VerifyQuickBooksResultsClick"/>
+                <Button Content="Sync QB Bills + Balance" Width="175" Margin="0,0,8,0" Click="SyncBillPaySnapshotClick"/>
+                <Button Content="Print Approved Checks" Width="155" Margin="0,0,8,0" Click="PrintApprovedChecksClick"/>
                 <Button Content="Save Securely" Width="110" Margin="0,0,8,0" Click="SaveClick"/>
                 <Button Content="Reload Saved" Width="110" Margin="0,0,8,0" Click="ReloadClick"/>
                 <Button Content="Clear Grid" Width="90" Click="ClearGridClick"/>
             </WrapPanel>
-            <WrapPanel VerticalAlignment="Center">
+
+            <WrapPanel Margin="0,0,0,8" VerticalAlignment="Center">
                 <CheckBox x:Name="AuthorizePostingCheckBox" Margin="0,0,12,0" VerticalAlignment="Center" Content="Authorize QB posting for this session"/>
                 <TextBlock VerticalAlignment="Center" Margin="0,0,6,0" Text="Transport:"/>
                 <ComboBox x:Name="QuickBooksModeComboBox"
                           Width="220"
                           Margin="0,0,12,0"
-                          SelectedIndex="0"
+                          SelectedIndex="1"
                           SelectionChanged="QuickBooksModeSelectionChanged">
                     <ComboBoxItem Tag="FileDropBridge">File Drop Bridge</ComboBoxItem>
                     <ComboBoxItem Tag="DirectDesktopSdk">Direct Desktop SDK (QBXMLRP2)</ComboBoxItem>
                 </ComboBox>
                 <TextBlock VerticalAlignment="Center" Margin="0,0,6,0" Text="Company File:"/>
-                <TextBox x:Name="CompanyFileTextBox" Width="210" Margin="0,0,12,0" Text="PrimaryCompany"/>
-                <TextBlock x:Name="QuickBooksPathsTextBlock" VerticalAlignment="Center" Foreground="#334155"/>
+                <TextBox x:Name="CompanyFileTextBox" Width="180" Margin="0,0,12,0" Text="PrimaryCompany"/>
+                <TextBlock VerticalAlignment="Center" Margin="0,0,6,0" Text="Operating Account:"/>
+                <TextBox x:Name="OperatingAccountTextBox" Width="190" Margin="0,0,12,0" Text="Operating Account"/>
+                <TextBlock VerticalAlignment="Center" Text="Due Soon Window: 3 days" Foreground="#334155"/>
             </WrapPanel>
+
+            <WrapPanel Margin="0,0,0,8" VerticalAlignment="Center">
+                <Button Content="All" Width="70" Margin="0,0,8,0" Click="FilterAllClick"/>
+                <Button Content="Overdue" Width="80" Margin="0,0,8,0" Click="FilterOverdueClick"/>
+                <Button Content="Due Soon" Width="85" Margin="0,0,8,0" Click="FilterDueSoonClick"/>
+                <Button Content="Upcoming" Width="85" Margin="0,0,8,0" Click="FilterUpcomingClick"/>
+                <TextBlock x:Name="QuickBooksPathsTextBlock" VerticalAlignment="Center" Foreground="#334155" Margin="12,0,0,0"/>
+            </WrapPanel>
+
+            <Border Background="#0F172A" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Foreground="#CBD5E1" Text="Operating Balance (Before)"/>
+                        <TextBlock x:Name="BalanceBeforeValueTextBlock" Foreground="White" FontSize="18" FontWeight="SemiBold" Text="$0.00"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Foreground="#CBD5E1" Text="Approved Check Run Total"/>
+                        <TextBlock x:Name="ApprovedTotalValueTextBlock" Foreground="White" FontSize="18" FontWeight="SemiBold" Text="$0.00"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Foreground="#CBD5E1" Text="Operating Balance (After)"/>
+                        <TextBlock x:Name="BalanceAfterValueTextBlock" Foreground="White" FontSize="18" FontWeight="SemiBold" Text="$0.00"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
         </StackPanel>
 
         <Border DockPanel.Dock="Bottom" Background="#1E293B" CornerRadius="6" Padding="10" Margin="0,10,0,0">
@@ -51,20 +98,30 @@
                   SelectionMode="Single"
                   SelectionUnit="FullRow">
             <DataGrid.Columns>
-                <DataGridTextColumn Header="Vendor" Binding="{Binding VendorName}" Width="190"/>
-                <DataGridTextColumn Header="Invoice #" Binding="{Binding InvoiceNumber}" Width="130"/>
-                <DataGridTextColumn Header="Invoice Date" Binding="{Binding InvoiceDate, StringFormat={}{0:yyyy-MM-dd}}" Width="115"/>
-                <DataGridTextColumn Header="Due Date" Binding="{Binding DueDate, StringFormat={}{0:yyyy-MM-dd}}" Width="115"/>
-                <DataGridTextColumn Header="Amount" Binding="{Binding Amount, StringFormat={}{0:F2}}" Width="95"/>
-                <DataGridTextColumn Header="Expense Account" Binding="{Binding ExpenseAccountName}" Width="150"/>
-                <DataGridTextColumn Header="PO/Job Raw" Binding="{Binding PurchaseOrderOrJobRaw}" Width="150"/>
-                <DataGridTextColumn Header="PO/Job (6-digit)" Binding="{Binding PurchaseOrderOrJobNormalized}" Width="130" IsReadOnly="True"/>
-                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110" IsReadOnly="True"/>
-                <DataGridTextColumn Header="QB Req ID" Binding="{Binding QuickBooksRequestId}" Width="185" IsReadOnly="True"/>
-                <DataGridTextColumn Header="QB Txn ID" Binding="{Binding QuickBooksTxnId}" Width="130" IsReadOnly="True"/>
-                <DataGridTextColumn Header="QB Attempts" Binding="{Binding QuickBooksPostAttemptCount}" Width="90" IsReadOnly="True"/>
-                <DataGridTextColumn Header="Validation Errors" Binding="{Binding ValidationErrorText}" Width="180" IsReadOnly="True"/>
-                <DataGridTextColumn Header="QB Last Error" Binding="{Binding QuickBooksLastErrorMessage}" Width="*" IsReadOnly="True"/>
+                <DataGridTemplateColumn Width="45">
+                    <DataGridTemplateColumn.Header>
+                        <CheckBox x:Name="ApproveAllHeaderCheckBox" Click="ApproveAllHeaderClick" ToolTip="Approve all visible bills"/>
+                    </DataGridTemplateColumn.Header>
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox IsChecked="{Binding ApprovedForPrint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      Checked="BillApprovalChanged"
+                                      Unchecked="BillApprovalChanged"
+                                      HorizontalAlignment="Center"/>
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Urgency" Binding="{Binding DueBucket}" Width="90" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Days Until Due" Binding="{Binding DaysUntilDue}" Width="105" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Vendor" Binding="{Binding VendorName}" Width="220"/>
+                <DataGridTextColumn Header="Invoice #" Binding="{Binding InvoiceNumber}" Width="120"/>
+                <DataGridTextColumn Header="Invoice Date" Binding="{Binding InvoiceDate, StringFormat={}{0:yyyy-MM-dd}}" Width="120"/>
+                <DataGridTextColumn Header="Due Date" Binding="{Binding DueDate, StringFormat={}{0:yyyy-MM-dd}}" Width="120"/>
+                <DataGridTextColumn Header="Amount Due" Binding="{Binding Amount, StringFormat={}{0:F2}}" Width="105"/>
+                <DataGridTextColumn Header="Expense Account" Binding="{Binding ExpenseAccountName}" Width="170"/>
+                <DataGridTextColumn Header="QB Txn ID" Binding="{Binding QuickBooksTxnId}" Width="150" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Sync Source" Binding="{Binding SyncedFromQuickBooks}" Width="95" IsReadOnly="True"/>
+                <DataGridTextColumn Header="Notes" Binding="{Binding QuickBooksLastErrorMessage}" Width="*"/>
             </DataGrid.Columns>
         </DataGrid>
     </DockPanel>

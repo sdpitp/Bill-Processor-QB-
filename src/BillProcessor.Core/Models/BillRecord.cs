@@ -11,6 +11,9 @@ public sealed class BillRecord
     public string ExpenseAccountName { get; set; } = "Uncategorized Expense";
     public string PurchaseOrderOrJobRaw { get; set; } = string.Empty;
     public string PurchaseOrderOrJobNormalized { get; set; } = string.Empty;
+    public bool ApprovedForPrint { get; set; }
+    public BillDueBucket DueBucket { get; set; } = BillDueBucket.Unknown;
+    public int DaysUntilDue { get; set; } = int.MaxValue;
     public BillProcessingStatus Status { get; set; } = BillProcessingStatus.Imported;
     public List<string> ValidationErrors { get; set; } = [];
     public string ValidationErrorText { get; set; } = string.Empty;
@@ -22,6 +25,7 @@ public sealed class BillRecord
     public string QuickBooksLastErrorMessage { get; set; } = string.Empty;
     public bool QuickBooksLastErrorRecoverable { get; set; }
     public DateTimeOffset? QuickBooksPostedAtUtc { get; set; }
+    public bool SyncedFromQuickBooks { get; set; }
     public List<BillAuditEntry> AuditTrail { get; set; } = [];
     public DateTimeOffset LastUpdatedUtc { get; set; } = DateTimeOffset.UtcNow;
 
